@@ -141,7 +141,7 @@ func TestSignatureValue_InvalidDER(t *testing.T) {
 
 func TestSignatureValue_NoSigners(t *testing.T) {
 	sd := SignedData{
-		Version:      1,
+		Version:          1,
 		DigestAlgorithms: []AlgorithmIdentifier{{Algorithm: OIDSHA256, Parameters: nullRaw}},
 		EncapContentInfo: EncapsulatedContentInfo{
 			ContentType: OIDData,

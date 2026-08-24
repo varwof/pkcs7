@@ -267,4 +267,3 @@ func TestBuildSignedDataWithDigest_Detached(t *testing.T) {
 		t.Error("expected nil content for detached signature")
 	}
 }
-
