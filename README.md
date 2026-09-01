@@ -1,5 +1,9 @@
 # Varwof PKCS#7
 
+> ⚠️ **Preview** — Not for production use. Independent PKCS#7/CMS
+> implementation with no independent security audit; validate against your own
+> test vectors before relying on it.
+
 Pure standard-library PKCS#7 / CMS SignedData signing/verification implementation. Zero external dependencies.
 
 ## Features
