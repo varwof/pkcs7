@@ -2,6 +2,8 @@
 
 > 纯 Go PKCS#7 / CMS SignedData 签名与验证库，零外部依赖
 
+> ⚠️ **预览版** — 不可用于生产环境。独立实现的 PKCS#7/CMS，尚未经过独立安全审计；依赖前请用自有测试向量验证。
+
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Go Reference](https://pkg.go.dev/badge/github.com/varwof/pkcs7)](https://pkg.go.dev/github.com/varwof/pkcs7)
 
