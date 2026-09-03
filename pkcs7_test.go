@@ -458,3 +458,50 @@ func newBenchCert(b *testing.B, key crypto.Signer) *x509.Certificate {
 	}
 	return cert
 }
+
+// TestBuildSignedDataWithoutCertificates verifies RFC 3161 §2.4.1 certReq=false
+// behavior: the SignedData.certificates field is empty while the signer can
+// still be identified via the ESSCertID signing attribute.
+func TestBuildSignedDataWithoutCertificates(t *testing.T) {
+	kp := newECDSAP256(t)
+	content := []byte("timestamp token content")
+
+	result, err := BuildSignedDataWithoutCertificates(OIDSignedData, content, kp.Cert, kp.Key, nil)
+	if err != nil {
+		t.Fatalf("BuildSignedDataWithoutCertificates: %v", err)
+	}
+
+	var ci ContentInfo
+	if _, err := asn1.Unmarshal(result, &ci); err != nil {
+		t.Fatalf("unmarshal ContentInfo: %v", err)
+	}
+	if !ci.ContentType.Equal(OIDSignedData) {
+		t.Fatalf("wrong content type: %v", ci.ContentType)
+	}
+	var sd SignedData
+	if _, err := asn1.Unmarshal(ci.Content.Bytes, &sd); err != nil {
+		t.Fatalf("unmarshal SignedData: %v", err)
+	}
+
+	// RFC 3161 §2.4.1: certReq=false must yield an empty certificates field.
+	if len(sd.Certificates) != 0 {
+		t.Fatalf("expected empty certificates, got %d", len(sd.Certificates))
+	}
+
+	// The ESSCertID signing attribute (signingCertificateV2 → signingCertificate)
+	// must still identify the signer.
+	if len(sd.SignerInfos) != 1 {
+		t.Fatalf("expected 1 signer, got %d", len(sd.SignerInfos))
+	}
+	essCertID := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 2, 47}
+	found := false
+	for _, a := range sd.SignerInfos[0].SignedAttributes {
+		if a.Type.Equal(essCertID) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected ESSCertID signing attribute present when certificates are omitted")
+	}
+}

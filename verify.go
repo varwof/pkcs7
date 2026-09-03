@@ -32,10 +32,7 @@ func VerifyDetached(der []byte, content []byte) (*x509.Certificate, error) {
 	}
 	si := sd.SignerInfos[0]
 
-	serial := new(big.Int)
-	if err := serial.UnmarshalText(si.IssuerAndSerial.SerialNumber.Bytes); err != nil {
-		serial.SetBytes(si.IssuerAndSerial.SerialNumber.Bytes)
-	}
+	serial := parseSerial(si.IssuerAndSerial.SerialNumber)
 
 	var signerCert *x509.Certificate
 	for _, cr := range sd.Certificates {
@@ -43,13 +40,25 @@ func VerifyDetached(der []byte, content []byte) (*x509.Certificate, error) {
 		if err != nil {
 			continue
 		}
-		if cert.SerialNumber.Cmp(serial) == 0 {
+		// Security: identify the signer by issuer AND serial, never by serial
+		// alone. Serial numbers are not globally unique, so a cert sharing only a
+		// serial number must not be able to claim another signer's identity.
+		if certificateMatches(si.IssuerAndSerial, cert, serial) {
 			signerCert = cert
 			break
 		}
 	}
 	if signerCert == nil {
 		return nil, errNoSigner
+	}
+
+	// Security: when the signed attributes carry a signingCertificate (ESSCertID)
+	// attribute, it binds the signature to a specific certificate by digest. Verify
+	// it matches the certificate that actually holds the signing key, so a token
+	// embedding a certificate with the same issuer+serial but a different public key
+	// is rejected rather than mis-attributed.
+	if err := verifySigningCertAttr(si.SignedAttributes, signerCert); err != nil {
+		return nil, err
 	}
 
 	hash, err := hashFromOID(si.DigestAlgorithm.Algorithm)
@@ -149,4 +158,79 @@ func verifySignature(pub crypto.PublicKey, digest []byte, sig []byte, opts crypt
 	default:
 		return fmt.Errorf("unsupported public key type: %T", pub)
 	}
+}
+
+// oidSigningCertV2 is the signingCertificateV2 attribute (RFC 5035 §3) that the
+// builder emits as an ESSCertID carrying the SHA-256 digest of the signer cert.
+var oidSigningCertV2 = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 2, 47}
+
+func parseSerial(rv asn1.RawValue) *big.Int {
+	serial := new(big.Int)
+	if err := serial.UnmarshalText(rv.Bytes); err != nil {
+		serial.SetBytes(rv.Bytes)
+	}
+	return serial
+}
+
+// certificateMatches reports whether cert is the signer named by IssuerAndSerial:
+// both the serial number and the issuer distinguished name must match.
+func certificateMatches(ias IssuerAndSerial, cert *x509.Certificate, serial *big.Int) bool {
+	if cert.SerialNumber.Cmp(serial) != 0 {
+		return false
+	}
+	issuerDER := ias.Issuer.FullBytes
+	if len(issuerDER) == 0 {
+		issuerDER = ias.Issuer.Bytes
+	}
+	return bytes.Equal(cert.RawIssuer, issuerDER)
+}
+
+// essCertIDv2 mirrors RFC 5035 §3: hashAlgorithm defaults to id-sha256 in our
+// builder, followed by the certificate digest.
+type essCertIDv2 struct {
+	HashAlgorithm AlgorithmIdentifier `asn1:"optional"`
+	CertHash      []byte
+}
+
+type signingCertV2 struct {
+	Certs []essCertIDv2
+}
+
+// verifySigningCertAttr checks, when a signingCertificate (ESSCertID) attribute
+// is present in the signed attributes, that one of its certificate digests equals
+// the digest of cert. Returns nil if the attribute is absent (older/other
+// producers); fails closed if present but none of the digests match.
+func verifySigningCertAttr(attrs []Attribute, cert *x509.Certificate) error {
+	hasAttr := false
+	for _, a := range attrs {
+		if !a.Type.Equal(oidSigningCertV2) {
+			continue
+		}
+		hasAttr = true
+		for _, v := range a.Values {
+			var sc signingCertV2
+			if _, err := asn1.Unmarshal(v.FullBytes, &sc); err != nil {
+				continue
+			}
+			for _, e := range sc.Certs {
+				hash := crypto.SHA256 // RFC 5035 default
+				if len(e.HashAlgorithm.Algorithm) > 0 {
+					h, err := hashFromOID(e.HashAlgorithm.Algorithm)
+					if err != nil {
+						return fmt.Errorf("signingCertificate hash algorithm: %w", err)
+					}
+					hash = h
+				}
+				sum := hash.New()
+				sum.Write(cert.Raw)
+				if bytes.Equal(sum.Sum(nil), e.CertHash) {
+					return nil
+				}
+			}
+		}
+	}
+	if !hasAttr {
+		return nil
+	}
+	return errors.New("signingCertificate attribute does not match signer certificate")
 }

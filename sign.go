@@ -99,7 +99,21 @@ func BuildSignedDataWithHash(eContentType asn1.ObjectIdentifier, eContent []byte
 	h := hash.New()
 	h.Write(eContent)
 	digest := h.Sum(nil)
-	return BuildSignedDataWithDigest(eContentType, eContent, digest, cert, signer, chain, hash)
+	return buildSignedDataWithDigest(eContentType, eContent, digest, cert, signer, chain, hash, false)
+}
+
+// BuildSignedDataWithoutCertificates is like BuildSignedData but omits the
+// signing certificate (and any chain certificates) from SignedData.certificates.
+// RFC 3161 §2.4.1: a TimeStampReq whose certReq flag is FALSE (the default)
+// MUST result in a TimeStampToken whose SignedData.certificates field is
+// empty. The ESSCertID signing attribute still carries the certificate hash so
+// a verifier can identify the signer.
+func BuildSignedDataWithoutCertificates(eContentType asn1.ObjectIdentifier, eContent []byte, cert *x509.Certificate, signer crypto.Signer, chain []*x509.Certificate) ([]byte, error) {
+	hash := selectHash(cert)
+	h := hash.New()
+	h.Write(eContent)
+	digest := h.Sum(nil)
+	return buildSignedDataWithDigest(eContentType, eContent, digest, cert, signer, chain, hash, true)
 }
 
 // BuildSignedDataWithDigest builds a PKCS#7 SignedData using a precomputed digest.
@@ -107,6 +121,10 @@ func BuildSignedDataWithHash(eContentType asn1.ObjectIdentifier, eContent []byte
 // uses the provided digest directly for the messageDigest attribute.
 // If eContent is nil, the EncapContentInfo.Content is omitted (detached signature).
 func BuildSignedDataWithDigest(eContentType asn1.ObjectIdentifier, eContent, digest []byte, cert *x509.Certificate, signer crypto.Signer, chain []*x509.Certificate, hash crypto.Hash) ([]byte, error) {
+	return buildSignedDataWithDigest(eContentType, eContent, digest, cert, signer, chain, hash, false)
+}
+
+func buildSignedDataWithDigest(eContentType asn1.ObjectIdentifier, eContent, digest []byte, cert *x509.Certificate, signer crypto.Signer, chain []*x509.Certificate, hash crypto.Hash, omitCertificates bool) ([]byte, error) {
 	if hash == 0 {
 		hash = selectHash(cert)
 	}
@@ -193,6 +211,12 @@ func BuildSignedDataWithDigest(eContentType asn1.ObjectIdentifier, eContent, dig
 	sigOID := signatureAlgorithmOID(cert.PublicKey, hash)
 	digestOID := hashOID(hash)
 
+	// RFC 3161 §2.4.1: when certReq is FALSE the certificates field is omitted.
+	var certsField []asn1.RawValue
+	if !omitCertificates {
+		certsField = allCerts
+	}
+
 	sd := SignedData{
 		Version: 1,
 		DigestAlgorithms: []AlgorithmIdentifier{
@@ -202,7 +226,7 @@ func BuildSignedDataWithDigest(eContentType asn1.ObjectIdentifier, eContent, dig
 			ContentType: eContentType,
 			Content:     eContentRaw,
 		},
-		Certificates: allCerts,
+		Certificates: certsField,
 		SignerInfos: []SignerInfo{
 			{
 				Version: 1,
