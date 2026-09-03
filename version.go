@@ -4,4 +4,4 @@
 package pkcs7
 
 // Version is the current pkcs7 library version.
-const Version = "0.1.0"
+const Version = "0.1.1"
